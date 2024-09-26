@@ -1,33 +1,56 @@
 import React, { useEffect, useState } from "react";
-import {
-  Card,
-  Col,
-  Row,
-  Button,
-  Modal,
-  Form,
-  Input,
-  DatePicker,
-  Select,
-} from "antd";
+import { Card, Row } from "antd";
 import { Line, Pie } from "@ant-design/charts";
-import { PlusOutlined } from "@ant-design/icons";
 import moment from "moment";
 import TransactionSearch from "./TransactionSearch";
+import Header from "./Header";
+import AddIncomeModal from "./Modals/AddIncome";
+import AddExpenseModal from "./Modals/AddExpense";
+import Cards from "./Cards";
+import NoTransactions from "./NoTransactions";
+import { useAuthState } from "react-firebase-hooks/auth";
+import { auth, db } from "../firebase";
+import { addDoc, collection, getDocs, query } from "firebase/firestore";
+import Loader from "./Loader";
+import { toast } from "react-toastify";
+import { useNavigate } from "react-router-dom";
+import { unparse } from "papaparse";
 
 const Dashboard = () => {
-  const sampleTransactions = [
-    { type: "income", date: "2023-01-15", amount: 2000, tag: "salary" },
-    { type: "expense", date: "2023-01-20", amount: 500, tag: "food" },
-    { type: "expense", date: "2023-01-25", amount: 300, tag: "education" },
-    // Add more transactions
-  ];
+  const [user] = useAuthState(auth);
+
+  // const sampleTransactions = [
+  // {
+  //   name: "Pay day",
+  //   type: "income",
+  //   date: "2023-01-15",
+  //   amount: 2000,
+  //   tag: "salary",
+  // },
+  // {
+  //   name: "Dinner",
+  //   type: "expense",
+  //   date: "2023-01-20",
+  //   amount: 500,
+  //   tag: "food",
+  // },
+  // {
+  //   name: "Books",
+  //   type: "expense",
+  //   date: "2023-01-25",
+  //   amount: 300,
+  //   tag: "education",
+  // },
+  // ];
   const [isExpenseModalVisible, setIsExpenseModalVisible] = useState(false);
   const [isIncomeModalVisible, setIsIncomeModalVisible] = useState(false);
-  const [transactions, setTransactions] = useState(sampleTransactions);
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [currentBalance, setCurrentBalance] = useState(0);
   const [income, setIncome] = useState(0);
   const [expenses, setExpenses] = useState(0);
+
+  const navigate = useNavigate();
 
   const processChartData = () => {
     const balanceData = [];
@@ -85,15 +108,23 @@ const Dashboard = () => {
     setIsIncomeModalVisible(false);
   };
 
+  useEffect(() => {
+    fetchTransactions();
+  }, []);
+
   const onFinish = (values, type) => {
     const newTransaction = {
       type: type,
       date: moment(values.date).format("YYYY-MM-DD"),
       amount: parseFloat(values.amount),
       tag: values.tag,
+      name: values.name,
     };
 
     setTransactions([...transactions, newTransaction]);
+    setIsExpenseModalVisible(false);
+    setIsIncomeModalVisible(false);
+    addTransaction(newTransaction);
     calculateBalance();
   };
 
@@ -119,6 +150,40 @@ const Dashboard = () => {
     calculateBalance();
   }, [transactions]);
 
+  async function addTransaction(transaction, many) {
+    try {
+      const docRef = await addDoc(
+        collection(db, `users/${user.uid}/transactions`),
+        transaction
+      );
+      console.log("Document written with ID: ", docRef.id);
+      if (!many) {
+        toast.success("Transaction Added!");
+      }
+    } catch (e) {
+      console.error("Error adding document: ", e);
+      if (!many) {
+        toast.error("Couldn't add transaction");
+      }
+    }
+  }
+
+  async function fetchTransactions() {
+    setLoading(true);
+    if (user) {
+      const q = query(collection(db, `users/${user.uid}/transactions`));
+      const querySnapshot = await getDocs(q);
+      let transactionsArray = [];
+      querySnapshot.forEach((doc) => {
+        // doc.data() is never undefined for query doc snapshots
+        transactionsArray.push(doc.data());
+      });
+      setTransactions(transactionsArray);
+      toast.success("Transactions Fetched!");
+    }
+    setLoading(false);
+  }
+
   const balanceConfig = {
     data: balanceData,
     xField: "month",
@@ -131,159 +196,87 @@ const Dashboard = () => {
     colorField: "category",
   };
 
+  function reset() {
+    console.log("resetting");
+  }
+  const cardStyle = {
+    boxShadow: "0px 0px 30px 8px rgba(227, 227, 227, 0.75)",
+    margin: "2rem",
+    borderRadius: "0.5rem",
+    minWidth: "400px",
+    flex: 1,
+  };
+
+  function exportToCsv() {
+    const csv = unparse(transactions, {
+      fields: ["name", "type", "date", "amount", "tag"],
+    });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "transactions.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   return (
     <div className="dashboard-container">
-      <h1>Dashboard</h1>
-      <Row gutter={16}>
-        <Col span={8}>
-          <Card title="Current Balance" bordered={false}>
-            ${currentBalance}
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card title="Total Income" bordered={false}>
-            ${income}
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card title="Total Expenses" bordered={false}>
-            ${expenses}
-          </Card>
-        </Col>
-      </Row>
-      <Row gutter={16} style={{ marginTop: "16px" }}>
-        <Col span={12}>
-          <Card title="Financial Statistics" bordered={false}>
-            <Line {...{ ...balanceConfig, data: balanceData }} />
-          </Card>
-        </Col>
-        <Col span={12}>
-          <Card title="Total Spending" bordered={false}>
-            <Pie {...{ ...spendingConfig, data: spendingDataArray }} />
-          </Card>
-        </Col>
-      </Row>
+      <Header />
+      {loading ? (
+        <Loader />
+      ) : (
+        <>
+          <Cards
+            currentBalance={currentBalance}
+            income={income}
+            expenses={expenses}
+            showExpenseModal={showExpenseModal}
+            showIncomeModal={showIncomeModal}
+            cardStyle={cardStyle}
+            reset={reset}
+          />
 
-      {/* Add Expense Modal */}
-      <Modal
-        title="Add Expense"
-        visible={isExpenseModalVisible}
-        onCancel={handleExpenseCancel}
-        footer={null}
-      >
-        <Form
-          layout="vertical"
-          onFinish={(values) => onFinish(values, "expense")}
-        >
-          <Form.Item
-            label="Amount"
-            name="amount"
-            rules={[
-              { required: true, message: "Please input the expense amount!" },
-            ]}
-          >
-            <Input type="number" />
-          </Form.Item>
-          <Form.Item
-            label="Date"
-            name="date"
-            rules={[
-              { required: true, message: "Please select the expense date!" },
-            ]}
-          >
-            <DatePicker format="YYYY-MM-DD" />
-          </Form.Item>
-          <Form.Item
-            label="Tag"
-            name="tag"
-            rules={[{ required: true, message: "Please select a tag!" }]}
-          >
-            <Select>
-              <Select.Option value="food">Food</Select.Option>
-              <Select.Option value="education">Education</Select.Option>
-              <Select.Option value="office">Office</Select.Option>
-              {/* Add more tags here */}
-            </Select>
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              Add Expense
-            </Button>
-          </Form.Item>
-        </Form>
-      </Modal>
+          <AddExpenseModal
+            isExpenseModalVisible={isExpenseModalVisible}
+            handleExpenseCancel={handleExpenseCancel}
+            onFinish={onFinish}
+          />
+          <AddIncomeModal
+            isIncomeModalVisible={isIncomeModalVisible}
+            handleIncomeCancel={handleIncomeCancel}
+            onFinish={onFinish}
+          />
+          {transactions.length === 0 ? (
+            <NoTransactions />
+          ) : (
+            <>
+              <Row gutter={16}>
+                <Card bordered={true} style={cardStyle}>
+                  <h2>Financial Statistics</h2>
+                  <Line {...{ ...balanceConfig, data: balanceData }} />
+                </Card>
 
-      {/* Add Income Modal */}
-      <Modal
-        title="Add Income"
-        visible={isIncomeModalVisible}
-        onCancel={handleIncomeCancel}
-        footer={null}
-      >
-        <Form
-          layout="vertical"
-          onFinish={(values) => onFinish(values, "income")}
-        >
-          <Form.Item
-            label="Amount"
-            name="amount"
-            rules={[
-              { required: true, message: "Please input the income amount!" },
-            ]}
-          >
-            <Input type="number" />
-          </Form.Item>
-          <Form.Item
-            label="Date"
-            name="date"
-            rules={[
-              { required: true, message: "Please select the income date!" },
-            ]}
-          >
-            <DatePicker format="YYYY-MM-DD" />
-          </Form.Item>
-          <Form.Item
-            label="Tag"
-            name="tag"
-            rules={[{ required: true, message: "Please select a tag!" }]}
-          >
-            <Select>
-              <Select.Option value="salary">Salary</Select.Option>
-              <Select.Option value="freelance">Freelance</Select.Option>
-              <Select.Option value="investment">Investment</Select.Option>
-              {/* Add more tags here */}
-            </Select>
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              Add Income
-            </Button>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* Add Expense and Add Income buttons */}
-      <Row gutter={16} style={{ marginTop: "16px" }}>
-        <Col span={12}>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={showExpenseModal}
-          >
-            Add Expense
-          </Button>
-        </Col>
-        <Col span={12}>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={showIncomeModal}
-          >
-            Add Income
-          </Button>
-        </Col>
-      </Row>
-      <TransactionSearch transactions={transactions} />
+                <Card bordered={true} style={{ ...cardStyle, flex: 0.45 }}>
+                  <h2>Total Spending</h2>
+                  {spendingDataArray.length == 0 ? (
+                    <p>Seems like you haven't spent anything till now...</p>
+                  ) : (
+                    <Pie {...{ ...spendingConfig, data: spendingDataArray }} />
+                  )}
+                </Card>
+              </Row>
+            </>
+          )}
+          <TransactionSearch
+            transactions={transactions}
+            exportToCsv={exportToCsv}
+            fetchTransactions={fetchTransactions}
+            addTransaction={addTransaction}
+          />
+        </>
+      )}
     </div>
   );
 };
